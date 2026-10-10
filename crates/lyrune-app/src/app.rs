@@ -5862,7 +5862,7 @@ impl LyruneView {
         let next = if automatic && self.settings.repeat_mode == RepeatMode::One {
             Some(index)
         } else if continuation.is_none() && self.settings.shuffle && len > 1 {
-            Some(self.random_track_index(index, len))
+            Some(self.random_track_index(Some(index), len))
         } else if index + 1 < len {
             Some(index + 1)
         } else if !can_extend && self.settings.repeat_mode == RepeatMode::All {
@@ -5896,13 +5896,13 @@ impl LyruneView {
         }
     }
 
-    fn random_track_index(&self, current: usize, len: usize) -> usize {
+    fn random_track_index(&self, current: Option<usize>, len: usize) -> usize {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos() as usize;
-        let candidate = seed % (len - 1);
-        if candidate >= current {
+        let candidate = seed % (len - usize::from(current.is_some()));
+        if current.is_some_and(|current| candidate >= current) {
             candidate + 1
         } else {
             candidate
@@ -7836,7 +7836,11 @@ impl LyruneView {
                                         .h(px(44.))
                                         .min_w(px(44.))
                                         .px_4()
-                                        .tooltip("从第一首开始播放")
+                                        .tooltip(if self.settings.shuffle {
+                                            "随机选择一首开始播放"
+                                        } else {
+                                            "从第一首开始播放"
+                                        })
                                         .child(
                                             h_flex()
                                                 .gap_2()
@@ -7850,9 +7854,16 @@ impl LyruneView {
                                         )
                                         .when(!has_tracks, |button| button.bg(theme.button_primary))
                                         .disabled(!has_tracks)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.select_track(0, cx)),
-                                        ),
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let len =
+                                                this.track_table.read(cx).delegate().tracks().len();
+                                            let index = if this.settings.shuffle && len > 1 {
+                                                this.random_track_index(None, len)
+                                            } else {
+                                                0
+                                            };
+                                            this.select_track(index, cx);
+                                        })),
                                 ),
                             ),
                     ),
@@ -8020,7 +8031,11 @@ impl LyruneView {
                                         .h(px(44.))
                                         .min_w(px(44.))
                                         .px_4()
-                                        .tooltip("从第一首开始播放")
+                                        .tooltip(if self.settings.shuffle {
+                                            "随机选择一首开始播放"
+                                        } else {
+                                            "从第一首开始播放"
+                                        })
                                         .child(
                                             h_flex()
                                                 .gap_2()
@@ -8035,7 +8050,21 @@ impl LyruneView {
                                         .when(!has_tracks, |button| button.bg(theme.button_primary))
                                         .disabled(!has_tracks)
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.select_artist_track(0, cx)
+                                            let len = this.artist_resource.as_ref().map_or(
+                                                0,
+                                                |resource| {
+                                                    lock_resource(resource)
+                                                        .songs
+                                                        .as_ref()
+                                                        .map_or(0, |songs| songs.items.len())
+                                                },
+                                            );
+                                            let index = if this.settings.shuffle && len > 1 {
+                                                this.random_track_index(None, len)
+                                            } else {
+                                                0
+                                            };
+                                            this.select_artist_track(index, cx);
                                         })),
                                 ),
                             ),
