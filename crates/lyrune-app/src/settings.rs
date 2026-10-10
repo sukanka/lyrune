@@ -23,6 +23,15 @@ pub const DEFAULT_SCALE_PERCENT: u32 = 100;
 pub const MIN_SCALE_PERCENT: u32 = 50;
 pub const MAX_LYRIC_SCALE_PERCENT: u32 = 300;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PersistedPlayback {
     pub account_id: u64,
@@ -251,6 +260,8 @@ pub struct AppSettings {
     pub image_cache_capacity: usize,
     pub navigation_history_limit: usize,
     pub playback_quality: Quality,
+    pub shuffle: bool,
+    pub repeat_mode: RepeatMode,
     #[serde(alias = "lyric_frame_rate")]
     pub lyric_highlight_frame_rate: LyricFrameRate,
     pub lyric_scroll_frame_rate: LyricFrameRate,
@@ -282,6 +293,8 @@ impl Default for AppSettings {
             image_cache_capacity: DEFAULT_IMAGE_CACHE_CAPACITY,
             navigation_history_limit: DEFAULT_NAVIGATION_HISTORY_LIMIT,
             playback_quality: Quality::default(),
+            shuffle: false,
+            repeat_mode: RepeatMode::default(),
             lyric_highlight_frame_rate: LyricFrameRate::Fps30,
             lyric_scroll_frame_rate: LyricFrameRate::Display,
             last_library_view: None,
@@ -606,6 +619,8 @@ mod tests {
             DEFAULT_NAVIGATION_HISTORY_LIMIT
         );
         assert_eq!(settings.playback_quality, Quality::Standard);
+        assert!(!settings.shuffle);
+        assert_eq!(settings.repeat_mode, RepeatMode::Off);
         assert_eq!(settings.lyric_highlight_frame_rate, LyricFrameRate::Fps30);
         assert_eq!(settings.lyric_scroll_frame_rate, LyricFrameRate::Display);
         assert_eq!(settings.last_library_view, None);
@@ -695,6 +710,8 @@ mod tests {
             image_cache_capacity: 0,
             navigation_history_limit: usize::MAX,
             playback_quality: Quality::High,
+            shuffle: false,
+            repeat_mode: RepeatMode::Off,
             lyric_highlight_frame_rate: LyricFrameRate::Fps30,
             lyric_scroll_frame_rate: LyricFrameRate::Display,
             last_library_view: None,
@@ -749,6 +766,8 @@ mod tests {
             image_cache_capacity: 72,
             navigation_history_limit: 16,
             playback_quality: Quality::HiRes,
+            shuffle: true,
+            repeat_mode: RepeatMode::All,
             lyric_highlight_frame_rate: LyricFrameRate::Fps120,
             lyric_scroll_frame_rate: LyricFrameRate::Display,
             last_library_view: Some(PersistedLibraryView {
@@ -807,6 +826,8 @@ mod tests {
             expected.navigation_history_limit
         );
         assert_eq!(restored.playback_quality, expected.playback_quality);
+        assert_eq!(restored.shuffle, expected.shuffle);
+        assert_eq!(restored.repeat_mode, expected.repeat_mode);
         assert_eq!(
             restored.lyric_highlight_frame_rate,
             expected.lyric_highlight_frame_rate
@@ -819,6 +840,16 @@ mod tests {
         assert_eq!(restored.current_playback, expected.current_playback);
         assert_eq!(restored.window_size, expected.window_size);
         assert_eq!(restored.sidebar_width, expected.sidebar_width);
+
+        for repeat_mode in [RepeatMode::One, RepeatMode::Off] {
+            let mut settings = expected.clone();
+            settings.shuffle = false;
+            settings.repeat_mode = repeat_mode;
+            SettingsStore::save_to(&path, &settings).expect("save playback modes");
+            let restored = SettingsStore::load_from(&path).expect("load playback modes");
+            assert!(!restored.shuffle);
+            assert_eq!(restored.repeat_mode, repeat_mode);
+        }
 
         fs::write(&path, r#"{"volume":0.37}"#).expect("write legacy settings");
         let migrated = SettingsStore::load_from(&path).expect("migrate settings");

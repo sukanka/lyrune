@@ -59,7 +59,7 @@ use crate::settings::{
     AppSettings, CdnCacheStore, ColorThemeMode, DEFAULT_NAVIGATION_HISTORY_LIMIT, LibraryCache,
     LyricFrameRate, MAX_IMAGE_CACHE_CAPACITY, MAX_LYRIC_SCALE_PERCENT,
     MAX_NAVIGATION_HISTORY_LIMIT, MIN_SCALE_PERCENT, PersistedLibraryView, PersistedPlayback,
-    PersistedQueueContinuation, PersistedWindowSize, SettingsStore, TrayIconStyle,
+    PersistedQueueContinuation, PersistedWindowSize, RepeatMode, SettingsStore, TrayIconStyle,
     WindowDecoration, default_lyric_font_families, default_monospace_font_families,
     default_ui_font_families, parse_font_families,
 };
@@ -2149,13 +2149,6 @@ impl NavigationHistory {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RepeatMode {
-    Off,
-    All,
-    One,
-}
-
 #[derive(Clone)]
 struct PlaybackLocation {
     track_mid: String,
@@ -2359,8 +2352,6 @@ pub struct LyruneView {
     liked_state_loading: HashSet<String>,
     liked_toggle_loading: HashSet<String>,
     update_check_in_progress: bool,
-    shuffle: bool,
-    repeat_mode: RepeatMode,
     pending_playback_restore: Option<PersistedPlayback>,
     last_playback_persisted_at: Instant,
 
@@ -2812,8 +2803,6 @@ impl LyruneView {
             liked_state_loading: HashSet::new(),
             liked_toggle_loading: HashSet::new(),
             update_check_in_progress: false,
-            shuffle: false,
-            repeat_mode: RepeatMode::Off,
             pending_playback_restore,
             last_playback_persisted_at: Instant::now(),
             login_message: "正在读取已保存的登录状态…".to_owned(),
@@ -3253,16 +3242,18 @@ impl LyruneView {
                 self.set_mpris_position(&track_id, position, cx);
             }
             MprisCommand::SetLoopStatus(status) => {
-                self.repeat_mode = match status {
+                self.settings.repeat_mode = match status {
                     MprisLoopStatus::None => RepeatMode::Off,
                     MprisLoopStatus::Track => RepeatMode::One,
                     MprisLoopStatus::Playlist => RepeatMode::All,
                 };
+                self.persist_settings();
                 self.sync_mpris(false);
                 cx.notify();
             }
             MprisCommand::SetShuffle(shuffle) => {
-                self.shuffle = shuffle;
+                self.settings.shuffle = shuffle;
+                self.persist_settings();
                 self.sync_mpris(false);
                 cx.notify();
             }
@@ -5842,7 +5833,7 @@ impl LyruneView {
         }
         let previous = if index > 0 {
             Some(index - 1)
-        } else if self.repeat_mode == RepeatMode::All && queue_len > 0 {
+        } else if self.settings.repeat_mode == RepeatMode::All && queue_len > 0 {
             Some(queue_len - 1)
         } else {
             None
@@ -5868,13 +5859,13 @@ impl LyruneView {
             .as_ref()
             .and_then(|queue| queue.continuation);
         let can_extend = continuation.is_some_and(PersistedQueueContinuation::can_load_more);
-        let next = if automatic && self.repeat_mode == RepeatMode::One {
+        let next = if automatic && self.settings.repeat_mode == RepeatMode::One {
             Some(index)
-        } else if continuation.is_none() && self.shuffle && len > 1 {
+        } else if continuation.is_none() && self.settings.shuffle && len > 1 {
             Some(self.random_track_index(index, len))
         } else if index + 1 < len {
             Some(index + 1)
-        } else if !can_extend && self.repeat_mode == RepeatMode::All {
+        } else if !can_extend && self.settings.repeat_mode == RepeatMode::All {
             Some(0)
         } else {
             None
@@ -6420,15 +6411,15 @@ impl LyruneView {
         let can_go_next = audio_available
             && current_index.is_some_and(|index| {
                 can_extend
-                    || (self.shuffle && queue_len > 1)
+                    || (self.settings.shuffle && queue_len > 1)
                     || index + 1 < queue_len
-                    || (self.repeat_mode == RepeatMode::All && queue_len > 0)
+                    || (self.settings.repeat_mode == RepeatMode::All && queue_len > 0)
             });
         let can_go_previous = audio_available
             && current_index.is_some_and(|index| {
                 self.position >= Duration::from_secs(3)
                     || index > 0
-                    || (self.repeat_mode == RepeatMode::All && queue_len > 0)
+                    || (self.settings.repeat_mode == RepeatMode::All && queue_len > 0)
             });
         let track = self.current_track_data().map(|track| MprisTrack {
             id: mpris_track_id(&track.mid),
@@ -6448,12 +6439,12 @@ impl LyruneView {
         let has_track = track.is_some();
         MprisSnapshot {
             playback_status,
-            loop_status: match self.repeat_mode {
+            loop_status: match self.settings.repeat_mode {
                 RepeatMode::Off => MprisLoopStatus::None,
                 RepeatMode::All => MprisLoopStatus::Playlist,
                 RepeatMode::One => MprisLoopStatus::Track,
             },
-            shuffle: self.shuffle,
+            shuffle: self.settings.shuffle,
             volume: self.settings.volume as f64,
             position_micros: duration_micros(self.position),
             track,
@@ -10408,8 +10399,8 @@ impl LyruneView {
                                             .size(px(44.))
                                             .p_0()
                                             .tooltip("随机播放")
-                                            .toggled(self.shuffle)
-                                            .selected(self.shuffle)
+                                            .toggled(self.settings.shuffle)
+                                            .selected(self.settings.shuffle)
                                             .disabled(
                                                 self.playback_queue
                                                     .as_ref()
@@ -10418,7 +10409,7 @@ impl LyruneView {
                                             .child(div().w(px(28.)).flex().justify_center().child(
                                                 media_icon(
                                                     MediaIcon::Shuffle,
-                                                    if self.shuffle {
+                                                    if self.settings.shuffle {
                                                         icon_accent
                                                     } else {
                                                         icon_foreground
@@ -10427,13 +10418,14 @@ impl LyruneView {
                                                 ),
                                             ))
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.shuffle = !this.shuffle;
+                                                this.settings.shuffle = !this.settings.shuffle;
+                                                this.persist_settings();
                                                 #[cfg(target_os = "linux")]
                                                 this.sync_mpris(false);
                                                 cx.notify();
                                             })),
                                     )
-                                    .when(self.shuffle, |this| {
+                                    .when(self.settings.shuffle, |this| {
                                         this.child(
                                             div()
                                                 .absolute()
@@ -10517,9 +10509,9 @@ impl LyruneView {
                                             .rounded(px(999.))
                                             .size(px(44.))
                                             .p_0()
-                                            .tooltip(self.repeat_mode.label())
-                                            .toggled(self.repeat_mode != RepeatMode::Off)
-                                            .selected(self.repeat_mode != RepeatMode::Off)
+                                            .tooltip(self.settings.repeat_mode.label())
+                                            .toggled(self.settings.repeat_mode != RepeatMode::Off)
+                                            .selected(self.settings.repeat_mode != RepeatMode::Off)
                                             .disabled(
                                                 self.playback_queue
                                                     .as_ref()
@@ -10527,12 +10519,14 @@ impl LyruneView {
                                             )
                                             .child(div().w(px(28.)).flex().justify_center().child(
                                                 media_icon(
-                                                    if self.repeat_mode == RepeatMode::One {
+                                                    if self.settings.repeat_mode == RepeatMode::One
+                                                    {
                                                         MediaIcon::RepeatOne
                                                     } else {
                                                         MediaIcon::Repeat
                                                     },
-                                                    if self.repeat_mode != RepeatMode::Off {
+                                                    if self.settings.repeat_mode != RepeatMode::Off
+                                                    {
                                                         icon_accent
                                                     } else {
                                                         icon_foreground
@@ -10541,13 +10535,15 @@ impl LyruneView {
                                                 ),
                                             ))
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.repeat_mode = this.repeat_mode.next();
+                                                this.settings.repeat_mode =
+                                                    this.settings.repeat_mode.next();
+                                                this.persist_settings();
                                                 #[cfg(target_os = "linux")]
                                                 this.sync_mpris(false);
                                                 cx.notify();
                                             })),
                                     )
-                                    .when(self.repeat_mode != RepeatMode::Off, |this| {
+                                    .when(self.settings.repeat_mode != RepeatMode::Off, |this| {
                                         this.child(
                                             div()
                                                 .absolute()
